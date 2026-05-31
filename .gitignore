@@ -1,0 +1,10 @@
+models/distilbert_model/
+
+venv/
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+notebooks/bert_results/
+notebooks/bert_logs/
+.DS_Store
