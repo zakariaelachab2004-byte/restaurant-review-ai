@@ -12,3 +12,5 @@ transformers
 torch
 accelerate
 xgboost
+openpyxl
+joblib

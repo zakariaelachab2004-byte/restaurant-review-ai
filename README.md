@@ -1,8 +1,8 @@
-# Restaurant Review AI
+# RestoMind
 
 ## Présentation
 
-Restaurant Review AI est une application intelligente d'analyse des avis clients dans le secteur de la restauration.
+RestoMind est une application intelligente d’analyse des avis clients dans le secteur de la restauration.
 
 L'objectif du projet est d'exploiter les techniques de Natural Language Processing (NLP), Machine Learning et Deep Learning afin d'analyser automatiquement les avis clients, mesurer leur satisfaction et fournir des recommandations d'amélioration aux gestionnaires de restaurants.
 
@@ -184,4 +184,4 @@ Le projet permet :
 EL ACHAB Zakaria
 BENATIK Adnane
 
-Projet réalisé dans le cadre d'un projet de Deep Learning et NLP.
+Projet réalisé dans le cadre d’un Projet de Fin d’Année en IA/NLP.

@@ -1,425 +1,267 @@
-import streamlit as st
 import pandas as pd
-import joblib
-import re
-import nltk
-import torch
-import torch.nn.functional as F
+import streamlit as st
 
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-from collections import Counter
-from transformers import DistilBertTokenizerFast, DistilBertForSequenceClassification
+from style import inject_css, hero, feature_card, metric_card, alert_card, section_title
+
+from utils.auth import init_session_state, login_page, show_sidebar
+from utils.model_loader import load_bert_model
+from utils.file_utils import load_uploaded_reviews, find_review_column
+from utils.nlp_utils import analyze_reviews_dataframe, predict_with_confidence, detect_theme
+from utils.dashboard_utils import show_dashboard, get_kpis
+from utils.recommendations import show_global_recommendations, recommendation_agent
+from utils.db_utils import (
+    init_database,
+    save_analysis,
+    get_all_analyses,
+    get_analysis_results,
+    delete_analysis
+)
+
 
 # =========================
 # Configuration Streamlit
 # =========================
 st.set_page_config(
-    page_title="Restaurant Review AI - NLP",
-    layout="wide"
+    page_title="RestoMind - Analyse des avis clients",
+    page_icon="🍽️",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
+
 # =========================
-# Session state
+# Initialisation
 # =========================
-if "history" not in st.session_state:
-    st.session_state.history = []
+inject_css()
+init_session_state()
+init_database()
+
+
+# =========================
+# Authentification
+# =========================
+if not st.session_state.logged_in:
+    login_page()
+    st.stop()
+
 
 # =========================
 # Sidebar
 # =========================
-st.sidebar.title("Restaurant Review AI")
-st.sidebar.info(
-    """
-    Projet NLP
-    
-    - Analyse de sentiment
-    - DistilBERT
-    - Détection des thèmes
-    - KPIs
-    - Recommandations
-    - Export CSV
-    """
-)
+show_sidebar()
+
 
 # =========================
-# Ressources NLP
+# Chargement du modèle IA
 # =========================
-nltk.download("stopwords")
-nltk.download("wordnet")
-
-stop_words = set(stopwords.words("english"))
-lemmatizer = WordNetLemmatizer()
-
-# =========================
-# Chargement modèles + données
-# =========================
-@st.cache_resource
-def load_classic_model():
-    model = joblib.load("models/sentiment_model.pkl")
-    vectorizer = joblib.load("models/vectorizer.pkl")
-    return model, vectorizer
-
-@st.cache_resource
-def load_bert_model():
-    tokenizer = DistilBertTokenizerFast.from_pretrained("models/distilbert_model")
-    model = DistilBertForSequenceClassification.from_pretrained("models/distilbert_model")
-    model.eval()
-    return tokenizer, model
-
-@st.cache_data
-def load_data():
-    return pd.read_csv("data/raw/Restaurant_Reviews.tsv", sep="\t")
-
-model, vectorizer = load_classic_model()
 bert_tokenizer, bert_model = load_bert_model()
-df = load_data()
+
 
 # =========================
-# Fonctions NLP
+# Header principal
 # =========================
-def clean_text(text):
-    text = text.lower()
-    text = re.sub(r"[^a-zA-Z]", " ", text)
-    words = text.split()
-    words = [
-        lemmatizer.lemmatize(word)
-        for word in words
-        if word not in stop_words
-    ]
-    return " ".join(words)
-
-
-def detect_theme(review):
-    review = review.lower()
-    themes = []
-
-    if any(word in review for word in ["service", "waiter", "staff", "employee", "served"]):
-        themes.append("Service")
-
-    if any(word in review for word in ["food", "meal", "dish", "taste", "flavor", "menu", "pizza", "burger"]):
-        themes.append("Qualité des plats")
-
-    if any(word in review for word in ["price", "expensive", "cheap", "overpriced", "cost"]):
-        themes.append("Prix")
-
-    if any(word in review for word in ["clean", "dirty", "hygiene", "table", "bathroom"]):
-        themes.append("Hygiène")
-
-    if any(word in review for word in ["slow", "wait", "waiting", "late", "time"]):
-        themes.append("Temps d’attente")
-
-    if any(word in review for word in ["ambience", "atmosphere", "music", "place", "decor"]):
-        themes.append("Ambiance")
-
-    if len(themes) == 0:
-        themes.append("Autre")
-
-    return themes
-
-
-def recommendation_agent(review):
-    review = review.lower()
-    recommendations = []
-
-    if any(word in review for word in ["slow", "wait", "waiting", "late", "time"]):
-        recommendations.append({
-            "Problème": "Temps d’attente",
-            "Cause probable": "Service lent ou mauvaise organisation",
-            "Action recommandée": "Optimiser l’organisation du personnel et réduire le temps d’attente.",
-            "Priorité": "Élevée"
-        })
-
-    if any(word in review for word in ["rude", "staff", "waiter", "employee", "service"]):
-        recommendations.append({
-            "Problème": "Qualité du service",
-            "Cause probable": "Comportement du personnel ou manque de formation",
-            "Action recommandée": "Former le personnel à l’accueil, la communication et la relation client.",
-            "Priorité": "Élevée"
-        })
-
-    if any(word in review for word in ["expensive", "price", "overpriced", "cost"]):
-        recommendations.append({
-            "Problème": "Prix",
-            "Cause probable": "Prix perçu comme élevé par rapport à la qualité",
-            "Action recommandée": "Revoir la politique tarifaire ou proposer des offres promotionnelles.",
-            "Priorité": "Moyenne"
-        })
-
-    if any(word in review for word in ["cold", "taste", "bad food", "food", "meal", "dish"]):
-        recommendations.append({
-            "Problème": "Qualité des plats",
-            "Cause probable": "Goût, température ou qualité insuffisante",
-            "Action recommandée": "Contrôler la qualité, le goût et la température des plats avant le service.",
-            "Priorité": "Élevée"
-        })
-
-    if any(word in review for word in ["dirty", "clean", "hygiene", "table", "bathroom"]):
-        recommendations.append({
-            "Problème": "Hygiène",
-            "Cause probable": "Manque de contrôle de propreté",
-            "Action recommandée": "Renforcer les contrôles d’hygiène et de nettoyage.",
-            "Priorité": "Élevée"
-        })
-
-    if len(recommendations) == 0:
-        recommendations.append({
-            "Problème": "Non identifié",
-            "Cause probable": "Avis trop général",
-            "Action recommandée": "Analyser manuellement l’avis pour identifier la cause principale.",
-            "Priorité": "Faible"
-        })
-
-    return recommendations
-
-
-def predict_with_confidence(text):
-    inputs = bert_tokenizer(
-        text,
-        return_tensors="pt",
-        truncation=True,
-        padding=True,
-        max_length=128
-    )
-
-    with torch.no_grad():
-        outputs = bert_model(**inputs)
-
-    probabilities = F.softmax(outputs.logits, dim=1)
-
-    predicted_class = torch.argmax(probabilities, dim=1).item()
-    confidence = probabilities[0][predicted_class].item()
-
-    sentiment = "Positif" if predicted_class == 1 else "Négatif"
-
-    return sentiment, confidence
-
-# =========================
-# Préparation des données
-# =========================
-df["clean_review"] = df["Review"].apply(clean_text)
-df["themes"] = df["Review"].apply(detect_theme)
-themes_df = df.explode("themes")
-
-# =========================
-# Interface principale
-# =========================
-st.title("Restaurant Review AI")
-st.write(
-    "Système intelligent d’analyse des avis clients pour l’amélioration "
-    "des services de restauration."
+hero(
+    "RestoMind",
+    "Une application web intelligente permettant au gérant d’importer des avis clients, "
+    "d’analyser automatiquement le sentiment, de détecter les thèmes importants et de "
+    "générer des recommandations d’amélioration."
 )
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "Dashboard global",
-    "Analyse d’un avis",
-    "Comparaison des modèles",
-    "Historique / Export"
+
+# =========================
+# Onglets
+# =========================
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "🏠 Accueil",
+    "📤 Importer des avis",
+    "📊 Dashboard",
+    "💡 Recommandations IA",
+    "🧪 Tester un avis",
+    "🗂️ Historique",
 ])
 
+
 # =========================
-# TAB 1 : Dashboard global
+# TAB 1 : Accueil
 # =========================
 with tab1:
-    st.header("Dashboard global")
+    section_title(
+        "Bienvenue dans votre espace d’analyse",
+        "Une interface simple pour transformer les avis clients en décisions utiles."
+    )
 
-    total_reviews = len(df)
-    positive_reviews = df[df["Liked"] == 1].shape[0]
-    negative_reviews = df[df["Liked"] == 0].shape[0]
-    satisfaction_rate = df["Liked"].mean() * 100
-    negative_rate = 100 - satisfaction_rate
+    col1, col2, col3 = st.columns(3)
 
-    # KPIs principaux
-    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        feature_card(
+            "📤",
+            "Importer les avis",
+            "Ajoutez un fichier CSV ou Excel contenant les commentaires clients du restaurant."
+        )
 
-    col1.metric("Nombre total d'avis", total_reviews)
-    col2.metric("Avis positifs", positive_reviews)
-    col3.metric("Avis négatifs", negative_reviews)
-    col4.metric("Taux de satisfaction", f"{satisfaction_rate:.2f}%")
+    with col2:
+        feature_card(
+            "🤖",
+            "Analyser automatiquement",
+            "Le modèle DistilBERT détecte le sentiment et calcule un score de confiance."
+        )
 
-    # KPIs avancés
-    col5, col6, col7 = st.columns(3)
-
-    col5.metric("Taux d'insatisfaction", f"{negative_rate:.2f}%")
-    col6.metric("Ratio positif/négatif", f"{positive_reviews}/{negative_reviews}")
-    col7.metric("Nombre de thèmes détectés", themes_df["themes"].nunique())
+    with col3:
+        feature_card(
+            "📊",
+            "Décider rapidement",
+            "Consultez les KPI, les thèmes critiques et les recommandations prioritaires."
+        )
 
     st.divider()
 
-    # Répartition sentiments
-    st.subheader("Répartition des sentiments")
-
-    sentiment_counts = df["Liked"].map({
-        1: "Positif",
-        0: "Négatif"
-    }).value_counts()
-
-    st.bar_chart(sentiment_counts)
-
-    st.divider()
-
-    # Mots-clés globaux
-    st.subheader("Mots-clés les plus fréquents")
-
-    all_words = " ".join(df["clean_review"]).split()
-    word_counts = Counter(all_words)
-    top_words = word_counts.most_common(15)
-
-    keywords_df = pd.DataFrame(top_words, columns=["Mot", "Fréquence"])
-
-    col_words1, col_words2 = st.columns(2)
-
-    with col_words1:
-        st.dataframe(keywords_df)
-
-    with col_words2:
-        st.bar_chart(keywords_df.set_index("Mot"))
-
-    st.divider()
-
-    # Mots négatifs fréquents
-    st.subheader("Mots négatifs les plus fréquents")
-
-    negative_df = df[df["Liked"] == 0]
-
-    negative_sentiment_words = {
-    "bad", "worst", "disappointed", "slow", "wait", "waited",
-    "bland", "cold", "rude", "dirty", "terrible", "horrible",
-    "awful", "poor", "overpriced", "expensive", "disgusting",
-    "nasty", "unfriendly", "dry", "burnt", "tasteless",
-    "mediocre", "waste", "disappointing", "sucks", "problem",
-    "wrong", "late", "long", "never"
-    }
-
-    negative_words = " ".join(negative_df["clean_review"]).split()
-
-    filtered_negative_words = [
-    word
-    for word in negative_words
-    if word in negative_sentiment_words
-    ]
-
-    negative_word_counts = Counter(filtered_negative_words)
-
-    top_negative_words = negative_word_counts.most_common(15)
-
-    negative_keywords_df = pd.DataFrame(
-    top_negative_words,
-    columns=["Mot négatif", "Fréquence"]
-    )
-
-    st.dataframe(negative_keywords_df)
-    st.bar_chart(negative_keywords_df.set_index("Mot négatif"))
-    # Analyse des thèmes
-    st.subheader("Analyse des thèmes")
-
-    themes_df_filtered = themes_df[themes_df["themes"] != "Autre"]
-
-    theme_counts = themes_df_filtered["themes"].value_counts()
-    theme_satisfaction = themes_df_filtered.groupby("themes")["Liked"].mean() * 100
-    theme_satisfaction = theme_satisfaction.sort_values()
-
-    col_theme1, col_theme2 = st.columns(2)
-
-    with col_theme1:
-        st.write("Nombre d’avis par thème")
-        st.bar_chart(theme_counts)
-
-    with col_theme2:
-        st.write("Taux de satisfaction par thème")
-        st.bar_chart(theme_satisfaction)
-
-    st.divider()
-
-    # Tableau résumé par thème
-    st.subheader("Tableau résumé par thème")
-
-    themes_df_filtered = themes_df[themes_df["themes"] != "Autre"]
-    theme_summary = themes_df_filtered.groupby("themes").agg(
-        Nombre_avis=("Review", "count"),
-        Satisfaction_moyenne=("Liked", "mean")
-    ).reset_index()
-
-    theme_summary["Satisfaction_moyenne"] = (
-        theme_summary["Satisfaction_moyenne"] * 100
-    ).round(2)
-
-    theme_summary = theme_summary.sort_values(
-        by="Satisfaction_moyenne",
-        ascending=True
-    )
-
-    st.dataframe(theme_summary)
-
-    st.divider()
-
-    # Insights automatiques
-    st.subheader("Insights automatiques")
-
-    worst_theme = theme_satisfaction.idxmin()
-    worst_score = theme_satisfaction.min()
-
-    best_theme = theme_satisfaction.idxmax()
-    best_score = theme_satisfaction.max()
-
-    most_discussed_theme = theme_counts.idxmax()
-    most_discussed_count = theme_counts.max()
-
-    st.write(
-        f"- Le thème le plus problématique est **{worst_theme}** "
-        f"avec un taux de satisfaction de **{worst_score:.2f}%**."
-    )
-
-    st.write(
-        f"- Le thème le plus performant est **{best_theme}** "
-        f"avec un taux de satisfaction de **{best_score:.2f}%**."
-    )
-
-    st.write(
-        f"- Le thème le plus mentionné est **{most_discussed_theme}** "
-        f"avec **{most_discussed_count} avis**."
-    )
-
-    if worst_score < 50:
-        st.warning(
-            f"Priorité élevée : améliorer le thème **{worst_theme}**."
+    if st.session_state.uploaded_results is None:
+        alert_card(
+            "Aucun fichier analysé pour le moment. Commencez par l’onglet Importer des avis.",
+            "warning"
         )
     else:
-        st.success(
-            "La satisfaction globale par thème est relativement correcte."
+        alert_card(
+            f"Un fichier a déjà été analysé : {st.session_state.uploaded_filename}. "
+            "Vous pouvez consulter le dashboard.",
+            "success"
         )
 
-    st.divider()
+        analyzed_df = st.session_state.uploaded_results
+        total, positive, negative, satisfaction, dissatisfaction = get_kpis(analyzed_df)
 
-    # Recommandations globales
-    st.subheader("Recommandations globales")
+        col_a, col_b, col_c = st.columns(3)
 
-    if negative_rate > 40:
-        st.error(
-            "Le taux d’insatisfaction est élevé. Il est recommandé de traiter rapidement les causes principales des avis négatifs."
-        )
-    elif negative_rate > 25:
-        st.warning(
-            "Le taux d’insatisfaction est moyen. Des actions d’amélioration ciblées sont recommandées."
-        )
-    else:
-        st.success(
-            "Le niveau global de satisfaction est bon. Il faut maintenir les points forts identifiés."
-        )
+        with col_a:
+            metric_card("Avis analysés", total, "Fichier actuellement chargé", "#2563EB")
 
-    st.write(
-        f"- Priorité 1 : travailler sur **{worst_theme}**."
-    )
-    st.write(
-        f"- Priorité 2 : surveiller les mots négatifs fréquents comme : "
-        f"**{', '.join(negative_keywords_df['Mot négatif'].head(5))}**."
-    )
+        with col_b:
+            metric_card("Avis positifs", positive, "Clients satisfaits", "#10B981")
+
+        with col_c:
+            metric_card("Satisfaction", f"{satisfaction:.1f}%", "Performance globale", "#F97316")
+
 
 # =========================
-# TAB 2 : Analyse individuelle
+# TAB 2 : Importer des avis
 # =========================
 with tab2:
-    st.header("Analyse d’un nouvel avis avec DistilBERT")
+    section_title(
+        "Importer un fichier d’avis clients",
+        "Le fichier doit contenir une colonne avec les avis : Review, Avis, Commentaire, Feedback, Text..."
+    )
+
+    uploaded_file = st.file_uploader(
+        "Importer un fichier CSV ou Excel contenant les avis clients",
+        type=["csv", "xlsx"]
+    )
+
+    if uploaded_file is not None:
+        try:
+            uploaded_df = load_uploaded_reviews(uploaded_file)
+
+            alert_card("Fichier chargé avec succès.", "success")
+
+            section_title("Aperçu du fichier", "Les premières lignes du fichier importé")
+            st.dataframe(uploaded_df.head(), use_container_width=True)
+
+            review_column = find_review_column(uploaded_df)
+
+            if review_column is None:
+                alert_card(
+                    "Impossible d’identifier automatiquement la colonne contenant les avis.",
+                    "warning"
+                )
+
+                review_column = st.selectbox(
+                    "Choisir la colonne contenant les avis :",
+                    uploaded_df.columns
+                )
+
+            alert_card(f"Colonne utilisée pour l’analyse : {review_column}", "info")
+
+            reviews_df = pd.DataFrame()
+            reviews_df["Review"] = uploaded_df[review_column].astype(str)
+
+            if st.button("Analyser les avis", use_container_width=True):
+
+                analyzed_df = analyze_reviews_dataframe(
+                    reviews_df,
+                    bert_tokenizer,
+                    bert_model
+                )
+
+                st.session_state.uploaded_results = analyzed_df
+                st.session_state.uploaded_filename = uploaded_file.name
+
+                save_analysis(uploaded_file.name, analyzed_df)
+
+                alert_card(
+                    "Analyse terminée et sauvegardée dans l’historique. "
+                    "Vous pouvez la consulter dans l’onglet Historique.",
+                    "success"
+                )
+
+        except Exception as e:
+            alert_card(f"Erreur lors du chargement du fichier : {e}", "danger")
+
+
+# =========================
+# TAB 3 : Dashboard
+# =========================
+with tab3:
+    section_title(
+        "Dashboard des avis importés",
+        "Visualisation globale des sentiments, thèmes et scores de satisfaction."
+    )
+
+    if st.session_state.uploaded_results is None:
+        alert_card("Veuillez d’abord importer et analyser un fichier d’avis.", "info")
+    else:
+        analyzed_df = st.session_state.uploaded_results
+
+        show_dashboard(analyzed_df)
+
+        st.divider()
+
+        section_title("Résultats détaillés", "Tableau complet des avis analysés")
+        st.dataframe(analyzed_df, use_container_width=True)
+
+        csv = analyzed_df.to_csv(index=False).encode("utf-8")
+
+        st.download_button(
+            label="Télécharger les résultats CSV",
+            data=csv,
+            file_name="resultats_analyse_avis.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
+
+# =========================
+# TAB 4 : Recommandations IA
+# =========================
+with tab4:
+    section_title(
+        "Recommandations IA",
+        "Actions prioritaires générées à partir des avis négatifs et des thèmes détectés."
+    )
+
+    if st.session_state.uploaded_results is None:
+        alert_card("Veuillez d’abord importer et analyser un fichier d’avis.", "info")
+    else:
+        analyzed_df = st.session_state.uploaded_results
+        show_global_recommendations(analyzed_df)
+
+
+# =========================
+# TAB 5 : Tester un avis
+# =========================
+with tab5:
+    section_title(
+        "Tester un avis manuellement",
+        "Saisissez un avis client pour obtenir son sentiment, son score de confiance et les recommandations associées."
+    )
 
     example_reviews = [
         "",
@@ -430,42 +272,63 @@ with tab2:
         "The price was too expensive for the quality"
     ]
 
-    selected_example = st.selectbox(
-        "Choisir un exemple d’avis :",
-        example_reviews
-    )
+    selected_example = st.selectbox("Choisir un exemple d’avis :", example_reviews)
 
     review = st.text_area(
         "Entrez un avis client :",
         value=selected_example,
-        height=150
+        height=160
     )
 
-    if st.button("Analyser l’avis"):
+    if st.button("Analyser l’avis", use_container_width=True):
         if review.strip() == "":
-            st.warning("Veuillez entrer un avis.")
+            alert_card("Veuillez entrer un avis.", "warning")
         else:
-            sentiment, confidence = predict_with_confidence(review)
+            sentiment, confidence = predict_with_confidence(
+                review,
+                bert_tokenizer,
+                bert_model
+            )
+
             detected_themes = detect_theme(review)
 
-            st.subheader("Résultat de l’analyse")
+            st.divider()
 
-            if sentiment == "Positif":
-                st.success("Sentiment détecté : Positif")
-                st.write("Le client semble satisfait.")
-            else:
-                st.error("Sentiment détecté : Négatif")
-                st.write("Le client semble insatisfait.")
+            section_title("Résultat de l’analyse")
 
-            st.metric("Score de confiance", f"{confidence * 100:.2f}%")
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                color = "#10B981" if sentiment == "Positif" else "#EF4444"
+                metric_card("Sentiment", sentiment, "Résultat du modèle DistilBERT", color)
+
+            with col2:
+                metric_card("Confiance", f"{confidence * 100:.2f}%", "Probabilité du modèle", "#F97316")
+
+            with col3:
+                metric_card("Thèmes", len(detected_themes), ", ".join(detected_themes), "#2563EB")
+
             st.progress(float(confidence))
 
-            st.write("Modèle utilisé : **DistilBERT**")
+            if sentiment == "Positif":
+                alert_card(
+                    "Le client semble satisfait. Il faut maintenir les points forts identifiés.",
+                    "success"
+                )
+            else:
+                alert_card(
+                    "Le client semble insatisfait. Une action corrective est recommandée.",
+                    "danger"
+                )
 
-            st.subheader("Thème(s) détecté(s)")
+            st.divider()
+
+            section_title("Thème(s) détecté(s)")
             st.write(", ".join(detected_themes))
 
-            st.subheader("Recommandations proposées")
+            st.divider()
+
+            section_title("Recommandations proposées")
 
             if sentiment == "Négatif":
                 recommendations = recommendation_agent(review)
@@ -474,10 +337,10 @@ with tab2:
                     with st.expander(
                         f"Problème : {rec['Problème']} | Priorité : {rec['Priorité']}"
                     ):
-                        st.write("Cause probable :", rec["Cause probable"])
-                        st.write("Action recommandée :", rec["Action recommandée"])
+                        st.write("**Cause probable :**", rec["Cause probable"])
+                        st.write("**Action recommandée :**", rec["Action recommandée"])
             else:
-                st.success("Maintenir les points forts identifiés dans cet avis.")
+                alert_card("Maintenir les points forts identifiés dans cet avis.", "success")
 
             st.session_state.history.append({
                 "Avis": review,
@@ -486,64 +349,94 @@ with tab2:
                 "Thèmes": ", ".join(detected_themes)
             })
 
-# =========================
-# TAB 3 : Comparaison modèles
-# =========================
-with tab3:
-    st.header("Comparaison des modèles")
+    if len(st.session_state.history) > 0:
+        st.divider()
+        section_title("Historique des tests manuels")
 
-    model_results = pd.DataFrame({
-        "Modèle": [
-            "Logistic Regression",
-            "Naive Bayes",
-            "SVM",
-            "DistilBERT"
-        ],
-        "Accuracy": [
-            0.735,
-            0.770,
-            0.750,
-            0.915
-        ]
-    })
-
-    st.dataframe(model_results)
-
-    st.bar_chart(model_results.set_index("Modèle"))
-
-    best_model = model_results.sort_values(
-        by="Accuracy",
-        ascending=False
-    ).iloc[0]
-
-    st.success(
-        f"Le meilleur modèle est **{best_model['Modèle']}** "
-        f"avec une accuracy de **{best_model['Accuracy'] * 100:.2f}%**."
-    )
-
-    st.info(
-        "Les modèles classiques ont été utilisés comme baseline. "
-        "DistilBERT a été retenu comme modèle avancé grâce à sa meilleure performance."
-    )
-
-# =========================
-# TAB 4 : Historique / Export
-# =========================
-with tab4:
-    st.header("Historique des analyses")
-
-    if len(st.session_state.history) == 0:
-        st.info("Aucun avis analysé pour le moment.")
-    else:
         history_df = pd.DataFrame(st.session_state.history)
+        st.dataframe(history_df, use_container_width=True)
 
-        st.dataframe(history_df)
 
-        csv = history_df.to_csv(index=False).encode("utf-8")
+# =========================
+# TAB 6 : Historique
+# =========================
+with tab6:
+    section_title(
+        "Historique des analyses",
+        "Liste des fichiers déjà traités et sauvegardés dans la base de données."
+    )
 
-        st.download_button(
-            label="Télécharger l’historique en CSV",
-            data=csv,
-            file_name="historique_avis.csv",
-            mime="text/csv"
+    analyses_df = get_all_analyses()
+
+    if analyses_df.empty:
+        alert_card("Aucune analyse sauvegardée pour le moment.", "info")
+
+    else:
+        st.dataframe(analyses_df, use_container_width=True)
+
+        st.divider()
+
+        analysis_ids = analyses_df["id"].tolist()
+
+        def format_analysis_option(analysis_id):
+            row = analyses_df[analyses_df["id"] == analysis_id].iloc[0]
+            filename = row["Fichier"]
+
+            if "Date d'analyse" in analyses_df.columns:
+                date_analyse = row["Date d'analyse"]
+            elif "Date d’analyse" in analyses_df.columns:
+                date_analyse = row["Date d’analyse"]
+            else:
+                date_analyse = "Date non disponible"
+
+            return f"{filename} - {date_analyse}"
+
+        selected_analysis_id = st.selectbox(
+            "Choisir une analyse à consulter :",
+            analysis_ids,
+            format_func=format_analysis_option
         )
+
+        selected_results = get_analysis_results(selected_analysis_id)
+
+        selected_row = analyses_df[analyses_df["id"] == selected_analysis_id].iloc[0]
+        selected_filename = selected_row["Fichier"]
+
+        section_title(
+            "Résultats de l’analyse sélectionnée",
+            f"Fichier : {selected_filename}"
+        )
+
+        st.dataframe(selected_results, use_container_width=True)
+
+        st.divider()
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("Charger cette analyse dans le dashboard", use_container_width=True):
+                st.session_state.uploaded_results = selected_results
+                st.session_state.uploaded_filename = selected_filename
+
+                alert_card(
+                    "Analyse chargée avec succès. Vous pouvez maintenant consulter les onglets Dashboard et Recommandations IA.",
+                    "success"
+                )
+
+        with col2:
+            csv_history = selected_results.to_csv(index=False).encode("utf-8")
+
+            st.download_button(
+                label="Télécharger cette analyse en CSV",
+                data=csv_history,
+                file_name=f"analyse_{selected_analysis_id}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        st.divider()
+
+        if st.button("Supprimer cette analyse", use_container_width=True):
+            delete_analysis(selected_analysis_id)
+            alert_card("Analyse supprimée avec succès.", "success")
+            st.rerun()
